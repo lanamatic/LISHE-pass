@@ -206,11 +206,9 @@ PreservedAnalyses LISHEPass::run(Function &F, FunctionAnalysisManager &FAM)
 // Plugin registration
 extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo llvmGetPassPluginInfo()
 {
-    return {LLVM_PLUGIN_API_VERSION, "LISHEPass", "0.1", [](PassBuilder &PB)
-            {
+    return {LLVM_PLUGIN_API_VERSION, "LISHEPass", "0.1", [](PassBuilder &PB) {
                 PB.registerPipelineParsingCallback(
-                    [](StringRef Name, FunctionPassManager &FPM, ArrayRef<PassBuilder::PipelineElement>)
-                    {
+                    [](StringRef Name, FunctionPassManager &FPM, ArrayRef<PassBuilder::PipelineElement>) {
                         if (Name == "lishe")
                         {
                             FPM.addPass(LISHEPass());
