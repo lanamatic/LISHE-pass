@@ -44,3 +44,66 @@ static bool noOtherAliasingStoresInLoop(StoreInst *SI, Loop *L, AAResults &AA) {
     }
     return true;
 }
+
+// Loop needs to execute at least once
+static bool loopExecutesAtLeastOnce(Loop *L, ScalarEvolution &SE) {
+    unsigned SC = SE.getSmallConstantTripCount(L);
+    if (SC >= 1) return true;
+    unsigned MaxSC = SE.getSmallConstantMaxTripCount(L);
+    if (MaxSC >= 1) return true;
+    return false; 
+}
+
+PreservedAnalyses LISHEPass::run(Function &F, FunctionAnalysisManager &FAM) {
+    // Get analysis from FAM
+    auto &LI = FAM.getResult<LoopAnalysis>(F); // Loop structure
+    auto &AA = FAM.getResult<AAManager>(F); // Alias analysis
+    auto &SE = FAM.getResult<ScalarEvolutionAnalysis>(F); // Trip count
+
+    bool Changed = false; // Did pass change something in IR
+
+    SmallVector<Loop *, 8> Stack(LI.begin(), LI.end()); // Stack with all top-level loops
+    while (!Stack.empty()) {
+        Loop *L = Stack.pop_back_val();
+        Stack.append(L->begin(), L->end()); // For every loop add inner loop if exists
+
+        // Check is there a preheader
+        BasicBlock *Preheader = L->getLoopPreheader();
+        if (!Preheader) {
+            LLVM_DEBUG(dbgs() << "[LISHE] skip: no preheader\n");
+            continue;
+        }
+
+        // Loop must execute at least once
+        if (!loopExecutesAtLeastOnce(L, SE)) {
+            LLVM_DEBUG(dbgs() << "[LISHE] skip: not guaranteed to execute >=1\n");
+            continue;
+        }
+
+        // Finding candidates for hoist
+        SmallVector<StoreInst *, 8> Candidates;
+        for (BasicBlock *BB : L->blocks()) {
+            for (Instruction &I : *BB) {
+                auto *SI = dyn_cast<StoreInst>(&I);
+                if (!SI) continue;
+                if (SI->isVolatile()) continue; // Skip volatile stores
+
+                Value *Ptr = SI->getPointerOperand();
+                Value *Val = SI->getValueOperand();
+
+                // Both pointer and value must be loop-invariant
+                if (!L->isLoopInvariant(Ptr) || !L->isLoopInvariant(Val))
+                    continue;
+
+                // No other stores can modify the same memory location
+                if (!noOtherAliasingStoresInLoop(SI, L, AA))
+                    continue;
+
+                Candidates.push_back(SI);
+            }
+        }
+
+    } 
+
+    return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
+}
