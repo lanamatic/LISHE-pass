@@ -1,3 +1,7 @@
+# Ignore build directories
+**/build/
+**/bin/
+
 # Prerequisites
 *.d
 
@@ -39,3 +43,10 @@
 
 # debug information files
 *.dwo
+
+**/.vscode
+
+**/.DS_Store
+
+compile_commands.json
+
