@@ -103,6 +103,40 @@ PreservedAnalyses LISHEPass::run(Function &F, FunctionAnalysisManager &FAM) {
             }
         }
 
+        if (Candidates.empty()) continue;
+
+        IRBuilder<> B(Preheader->getTerminator());
+        for (StoreInst *SI : Candidates) {
+        // If there is already an identical store in preheader, skip adding a new one
+        bool PreheaderHasSame = false;
+        for (Instruction &PI : *Preheader) {
+            if (auto *PS = dyn_cast<StoreInst>(&PI)) {
+            if (!PS->isVolatile() &&
+                PS->getPointerOperand() == SI->getPointerOperand() &&
+                PS->getValueOperand()   == SI->getValueOperand()) {
+                PreheaderHasSame = true;
+                break;
+            }
+            }
+        }
+
+        if (!PreheaderHasSame) {
+            // Create a new store in preheader, copy relevant attributes
+            auto *NewS = B.CreateStore(SI->getValueOperand(), SI->getPointerOperand());
+            NewS->setAlignment(SI->getAlign());
+            NewS->setVolatile(SI->isVolatile());
+            NewS->setOrdering(SI->getOrdering());
+            NewS->setSyncScopeID(SI->getSyncScopeID());
+            LLVM_DEBUG(dbgs() << "[LISHE] hoist: " << *SI << "\n");
+        } else {
+            LLVM_DEBUG(dbgs() << "[LISHE] preheader already has same store\n");
+        }
+
+        // Delete original store from the loop
+        SI->eraseFromParent();
+        Changed = true;
+        }
+
     } 
 
     return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
