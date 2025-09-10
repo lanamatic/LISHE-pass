@@ -13,9 +13,9 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 
-if(NOT MSVC)
-  add_compile_options(-fvisibility=hidden -fvisibility-inlines-hidden)
-endif()
+# if(NOT MSVC)
+#   add_compile_options(-fvisibility=hidden -fvisibility-inlines-hidden)
+# endif()
 
 find_package(LLVM REQUIRED CONFIG)
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION} at: ${LLVM_DIR}")

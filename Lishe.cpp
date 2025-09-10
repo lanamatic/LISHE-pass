@@ -94,6 +94,77 @@ PreservedAnalyses LISHEPass::run(Function &F, FunctionAnalysisManager &FAM)
             continue;
         }
 
+        // Redudant Elimination
+        if (EnableRedundantStoreElim)
+        {
+            for (BasicBlock *BB : L->blocks())
+            {
+                StoreInst *LastStore = nullptr;
+                Value *LastPtr = nullptr;
+                Value *LastVal = nullptr;
+
+                auto resetTracker = [&]()
+                {
+                    LastStore = nullptr;
+                    LastPtr = nullptr;
+                    LastVal = nullptr;
+                };
+
+                for (auto It = BB->begin(); It != BB->end();)
+                {
+                    Instruction &I = *It++;
+                    // If we have a tracked store and encounter any write that may clobber it, reset.
+                    if (!isa<StoreInst>(&I) && LastStore && I.mayWriteToMemory())
+                    {
+                        MemoryLocation Loc = MemoryLocation::get(LastStore);
+                        ModRefInfo MRI = AA.getModRefInfo(&I, Loc);
+                        if (isModSet(MRI))
+                        {
+                            resetTracker();
+                        }
+                    }
+
+                    auto *SI = dyn_cast<StoreInst>(&I);
+                    if (!SI)
+                        continue;
+
+                    // Never touch atomic/volatile in this peephole
+                    if (SI->isVolatile() || SI->isAtomic())
+                    {
+                        resetTracker();
+                        continue;
+                    }
+
+                    Value *Ptr = SI->getPointerOperand();
+                    Value *Val = SI->getValueOperand();
+
+                    if (LastStore && Ptr == LastPtr && Val == LastVal)
+                    {
+                        LLVM_DEBUG(dbgs() << "[LISHE] eliminate redundant store: " << *SI << "\n");
+                        SI->eraseFromParent();
+                        Changed = true;
+                        // Tracker continues to refer to the earlier store.
+                        continue;
+                    }
+
+                    if (LastStore)
+                    {
+                        MemoryLocation Loc = MemoryLocation::get(LastStore);
+                        if (isModSet(AA.getModRefInfo(SI, Loc)))
+                        {
+                            resetTracker();
+                        }
+                    }
+
+                    // Begin tracking this store; any clobber resets later.
+                    LastStore = SI;
+                    LastPtr = Ptr;
+                    LastVal = Val;
+                    continue;
+                }
+            }
+        }
+
         // Finding candidates for hoist
         SmallVector<StoreInst *, 8> Candidates;
         for (BasicBlock *BB : L->blocks())
@@ -162,42 +233,6 @@ PreservedAnalyses LISHEPass::run(Function &F, FunctionAnalysisManager &FAM)
             SI->eraseFromParent();
             Changed = true;
         }
-
-        // Redundant elimination
-        if (EnableRedundantStoreElim)
-        {
-            DenseMap<std::pair<Value *, Value *>, StoreInst *> First;
-            SmallVector<StoreInst *, 8> ToErase;
-
-            for (BasicBlock *BB : L->blocks())
-            {
-                for (Instruction &I : *BB)
-                {
-                    if (auto *SI = dyn_cast<StoreInst>(&I))
-                    {
-                        if (SI->isVolatile())
-                            continue;
-                        auto Key = std::make_pair(SI->getPointerOperand(), SI->getValueOperand());
-                        auto It = First.find(Key);
-                        if (It == First.end())
-                        {
-                            First[Key] = SI;
-                        }
-                        else
-                        {
-                            // Identical store already seen — remove duplicate
-                            ToErase.push_back(SI);
-                        }
-                    }
-                }
-            }
-            for (StoreInst *E : ToErase)
-            {
-                LLVM_DEBUG(dbgs() << "[LISHE] eliminate redundant store: " << *E << "\n");
-                E->eraseFromParent();
-                Changed = true;
-            }
-        }
     }
 
     return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
@@ -206,9 +241,11 @@ PreservedAnalyses LISHEPass::run(Function &F, FunctionAnalysisManager &FAM)
 // Plugin registration
 extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo llvmGetPassPluginInfo()
 {
-    return {LLVM_PLUGIN_API_VERSION, "LISHEPass", "0.1", [](PassBuilder &PB) {
+    return {LLVM_PLUGIN_API_VERSION, "LISHEPass", "0.1", [](PassBuilder &PB)
+            {
                 PB.registerPipelineParsingCallback(
-                    [](StringRef Name, FunctionPassManager &FPM, ArrayRef<PassBuilder::PipelineElement>) {
+                    [](StringRef Name, FunctionPassManager &FPM, ArrayRef<PassBuilder::PipelineElement>)
+                    {
                         if (Name == "lishe")
                         {
                             FPM.addPass(LISHEPass());
